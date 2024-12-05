@@ -1,0 +1,132 @@
+Kubernetes installation steps:
+
+
+1. Create a script on each machine
+
+vi script.sh
+
+#!/bin/bash
+
+# Update package lists and install Docker
+sudo apt update -y
+sudo apt install docker.io -y
+
+# Set up Kubernetes repository and install kubelet, kubeadm, and kubectl
+sudo mkdir -p -m 755 /etc/apt/keyrings
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt-get update
+sudo apt-get install -y kubelet kubeadm kubectl
+
+# Enable net.bridge.bridge-nf-call-iptables
+sudo sysctl net.bridge.bridge-nf-call-iptables=1
+
+# Download and install cri-dockerd
+wget https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.14/cri-dockerd-0.3.14.amd64.tgz
+tar -xvf cri-dockerd-0.3.14.amd64.tgz
+cd cri-dockerd
+sudo install -o root -g root -m 0755 cri-dockerd /usr/local/bin/cri-dockerd
+
+# Download and set up cri-dockerd systemd service
+cd ..
+wget https://github.com/Mirantis/cri-dockerd/archive/refs/tags/v0.3.14.tar.gz
+tar -xvf v0.3.14.tar.gz
+cd cri-dockerd-0.3.14/
+sudo cp packaging/systemd/* /etc/systemd/system
+sudo sed -i -e 's,/usr/bin/cri-dockerd,/usr/local/bin/cri-dockerd,' /etc/systemd/system/cri-docker.service
+
+# Enable and start cri-docker service
+sudo systemctl daemon-reload
+sudo systemctl enable --now cri-docker.socket
+sudo systemctl enable cri-docker
+sudo systemctl start cri-docker
+sudo systemctl status cri-docker
+
+
+2. create a config file on the master machine and mention the master node ip address (advertiseAddress)
+
+vi config.yaml
+
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: 192.168.0.1
+  bindPort: 6443
+nodeRegistration:
+  criSocket: unix:///var/run/cri-dockerd.sock
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+networking:
+  podSubnet: 10.10.0/24
+
+
+3. sudo kubeadm init --config=config.yaml >> cluster_initialized.txt
+
+4. install the calico plugin on master node
+
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+
+5. join the worker node using --cri-socket unix:///var/run/cri-dockerd.sock
+
+kubeadm join 172.31.11.38:6443 --token wph2d0.kd5napddl92tpmva \
+    --discovery-token-ca-cert-hash sha256:000ddf2e8a5eb29a87f880c861da96c6309b32e65cb7acf6314cde14191681c4 \
+    --cri-socket unix:///var/run/cri-dockerd.sock
+
+
+
+Special Notes - 
+
+1. In the first step, execute the script using command "sh script.sh"
+
+2. In the second step, replace 'advertiseAddress' with private ip address of Master node and podsubnet CIDR could be of you choice.
+
+3. After 3rd step, make sure to use these commands to configure the config file:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+You will find them under "cluster_initialized.txt"
+
+4. After 4th step, kubeadm join command with token will also be present in "cluster_initialized.txt".
+
+5. Once cluster is created, use commands like "kubectl get nodes" and "kubect get pods" in your master node to verify.
+
+6. To execute these commands in worker nodes, you need config file to be present in worker nodes.
+
+
+Trobleshooting :
+
+1. If you forgot or lost the token to join worker nodes, you can use this command to create it again -
+
+"kubeadm token create --print-join-command"
+
+2. You can also use command "kubeadm reset" to configure it again.
+
+3. To list all ports running use command -
+
+"sudo apt-get install net-tools"
+"sudo netstat -tuln"  or  "sudo ss -tuln"
+
+4. To get process id for specific port number -
+
+"sudo lsof -i :<port_number>"
+
+5. To kill the process id -
+
+"sudo kill <PID>"
+
+if still it's running - force stop and kill using command -
+
+"sudo kill -9 <PID>"
+
+6. Once the process is stopped or killed then you can execute your commands easily.
+
+
+
+
+
+
+
+
